@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+
+RED='\e[31m'
+GREEN='\033[0;32m'
+NC='\e[0m'
+CONTAINER_ROOT='/var/www/html'
+
+export APP_UID=${APP_UID:-$UID}
+export APP_GID=${APP_GID:-$(id -g)}
+DC_RUN_ARGS="--rm --user ${APP_UID}:${APP_GID}"
+
+function  setup_is_successful {
+  echo -e "${GREEN}Окружение успешно установлено${NC}"
+  echo ""
+  echo -e "${GREEN}Теперь вы можете запустить приложение одной из следующих команд:${NC} './workspace up' или './workspace up -d'"
+
+  exit 0
+}
+
+# Install project (perform once after cloning repo)
+function setup {
+  set -x \
+  && docker-compose build --no-cache --pull \
+  && set +x \
+  && setup_is_successful
+}
+
+# Install project dependencies
+function install() {
+      set -x \
+      && docker-compose run $DC_RUN_ARGS app composer install \
+      && docker-compose run $DC_RUN_ARGS app yarn install \
+      && docker-compose run $DC_RUN_ARGS app npm run dev \
+      && docker-compose run $DC_RUN_ARGS app npm run admin-dev \
+      set +x
+}
+
+# Runs docker demon and set vm.max_map_count=262144
+function runDocker() {
+      sudo service docker start
+      sudo sysctl -w vm.max_map_count=262144
+}
+
+if [ $# -gt 0 ]; then
+  # if has arguments, choose one
+  case $1 in
+    "setup") setup
+    ;;
+    "install") install
+    ;;
+    "run-docker") runDocker
+    ;;
+    "stop") ./$0 down
+    ;;
+    "up")
+      shift 1
+      sudo service docker start
+      sleep 3
+      sudo sysctl -w vm.max_map_count=262144
+      docker-compose up "$@"
+    ;;
+    "shell")
+      shift 1
+
+      docker-compose run $DC_RUN_ARGS app sh
+    ;;
+
+    "restore-db")
+      docker exec -i dynamo--db mysql -uroot -proot laravel < "${2}"
+      ;;
+
+    "php")
+      shift 1
+
+      docker-compose run $DC_RUN_ARGS app php "$@"
+    ;;
+    "composer")
+      shift 1
+
+      docker-compose run $DC_RUN_ARGS app composer "$@"
+    ;;
+    "artisan")
+      shift 1
+
+      docker-compose run $DC_RUN_ARGS app php artisan "$@"
+    ;;
+    "npm")
+      shift 1
+
+      docker-compose run $DC_RUN_ARGS app npm "$@"
+    ;;
+    "yarn")
+      shift 1
+
+      docker-compose run $DC_RUN_ARGS app yarn "$@"
+    ;;
+    "cache-refresh")
+      docker-compose run $DC_RUN_ARGS app php artisan cache:clear \
+        && php artisan route:cache \
+        && php artisan config:cache \
+        && php artisan lighthouse:clear-cache \
+        && php artisan lighthouse:cache
+    ;;
+    "test")
+      shift 1
+
+      docker-compose run $DC_RUN_ARGS app php artisan test "$@"
+    ;;
+    "csfix")
+      shift 1
+
+      filesList="${@//`pwd`/$CONTAINER_ROOT}"
+
+      docker-compose run $DC_RUN_ARGS app php \
+        ./vendor/bin/php-cs-fixer fix --config .php_cs --allow-risky=yes $filesList
+    ;;
+    "redis")
+      shift 1
+
+      docker-compose exec redis redis-cli
+    ;;
+    # если команда неизвестная, передаем обработку docker compose
+    *) docker-compose $@
+    ;;
+  esac
+else
+  # если команде не было передано аргументов, показываем запущенные контейнеры
+  docker-compose ps
+fi
+
